@@ -1,14 +1,15 @@
-
 import sys
 import time
 from collections import deque
 
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QRect, QUrl
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QSlider, QTableWidget, QTableWidgetItem, QComboBox, QLineEdit, QTextEdit,
-    QFileDialog, QMessageBox, QSpinBox, QGroupBox
+    QFileDialog, QMessageBox, QSpinBox, QGroupBox, QStyleOptionSlider
 )
+from PyQt5.QtGui import QPixmap, QIcon, QPainter, QColor
+from PyQt5.QtWebEngineWidgets import QWebEngineView
 
 import pyqtgraph as pg
 import serial
@@ -104,10 +105,7 @@ class ESP32Dashboard(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("ESP32 Modern Dashboard")
-        self.resize(1150, 720)
-
-        self.serial_thread = None
-        self.rx_log_lines = 0
+        self.resize(1400, 900)
 
         # Buffers for plots
         self.max_points = 500
@@ -116,11 +114,12 @@ class ESP32Dashboard(QWidget):
         self.hum_buf = deque(maxlen=self.max_points)
 
         # ====== Layout ======
-        root = QHBoxLayout()
-        left = QVBoxLayout()
-        right = QVBoxLayout()
-        root.addLayout(left, 3)
-        root.addLayout(right, 2)
+        root = QVBoxLayout()
+        self.setLayout(root)
+        top = QHBoxLayout()
+        bottom = QHBoxLayout()
+        root.addLayout(top)
+        root.addLayout(bottom)
         self.setLayout(root)
 
         # --- Top controls (port + baud + connect) ---
@@ -143,7 +142,6 @@ class ESP32Dashboard(QWidget):
         self.connect_btn.clicked.connect(self.toggle_connection)
 
         self.status_dot = QLabel("● Disconnected")
-        self.set_status(False)
 
         conn_layout.addWidget(QLabel("Port:"))
         conn_layout.addWidget(self.port_combo, 1)
@@ -154,99 +152,86 @@ class ESP32Dashboard(QWidget):
         conn_layout.addStretch(1)
         conn_layout.addWidget(self.status_dot)
 
-        left.addWidget(conn_group)
+        top.addWidget(conn_group)
 
-        # --- Live plots ---
-        self.plot_widget = pg.PlotWidget(title="Live Sensors")
-        self.plot_widget.showGrid(x=True, y=True)
-        self.plot_widget.addLegend()
-        self.temp_curve = self.plot_widget.plot([], [], pen=pg.mkPen(width=2), name="Temp (°C)")
-        self.hum_curve = self.plot_widget.plot([], [], pen=pg.mkPen(width=2), name="Humidity (%)")
-        left.addWidget(self.plot_widget, 3)
+        # --- Left: Plots + Slider ---
+        left_col = QHBoxLayout()
+        bottom.addLayout(left_col, 3)
 
-        # --- Scatter example ---
-        self.scatter_plot = pg.PlotWidget(title="Scatter (demo)")
-        self.scatter_item = pg.ScatterPlotItem(size=8, pen=pg.mkPen(width=1))
-        self.scatter_plot.addItem(self.scatter_item)
-        left.addWidget(self.scatter_plot, 2)
+        # Plots column
+        plots_col = QVBoxLayout()
+        left_col.addLayout(plots_col, 8)
 
-        # Timer to keep UI updating (plot redraws etc.); data comes from serial thread signals
+        # 4 vertically stacked plot widgets
+        self.plot_widgets = []
+        for i in range(4):
+            match i:
+                case 0:
+                    pw = pg.PlotWidget(title="Temperature")
+                case 1:
+                    pw = pg.PlotWidget(title="Humidity")
+                case 2:
+                    pw = pg.PlotWidget(title="Pressure")
+                case 3:
+                    pw = pg.PlotWidget(title="Acceleration")
+            pw.showGrid(x=True, y=True)
+            pw.setMinimumHeight(120)
+            pw.setMaximumWidth(500)
+            plots_col.addWidget(pw, 1)
+            self.plot_widgets.append(pw)
+
+        # Example: assign curves for first two plots
+        self.temp_curve = self.plot_widgets[0].plot([], [], pen=pg.mkPen(width=2), name="Temp (°C)")
+        self.hum_curve = self.plot_widgets[1].plot([], [], pen=pg.mkPen(width=2), name="Humidity (%)")
+
+        # Altitude
+        self.altitude_bar = AltitudeBar(min_alt=0, max_alt=1000)
+        left_col.addWidget(self.altitude_bar, 1)
+
+        # --- Left: 3 Boxes (2 up, 1 down) ---
+        boxes_col = QVBoxLayout()
+        bottom.addLayout(boxes_col, 2)
+
+        # Top row
+        top_row = QHBoxLayout()
+        boxes_col.addLayout(top_row, 1)
+
+        # Parachute button
+        img_btn_group = QGroupBox("Image Button")
+        img_btn_layout = QVBoxLayout()
+        img_btn_group.setLayout(img_btn_layout)
+        self.img_btn = QPushButton()
+        self.img_btn.setIcon(QIcon("your_image.png"))  # Replace with your image path
+        self.img_btn.setIconSize(QPixmap("your_image.png").size())
+        img_btn_layout.addWidget(self.img_btn)
+        top_row.addWidget(img_btn_group, 1)
+
+        # Map GPS
+        map_group = QGroupBox("Map")
+        map_layout = QVBoxLayout()
+        map_group.setLayout(map_layout)
+        self.web_view = QWebEngineView()
+        self.web_view.setUrl(QUrl("https://www.google.com/maps"))
+        map_layout.addWidget(self.web_view)
+        top_row.addWidget(map_group, 2)
+
+        # Bottom: Gyro
+        bottom_group = QGroupBox("Images")
+        bottom_layout = QHBoxLayout()
+        bottom_group.setLayout(bottom_layout)
+        self.img1 = QLabel()
+        self.img2 = QLabel()
+        self.img1.setPixmap(QPixmap("rocket.png").scaled(180, 120, Qt.KeepAspectRatio))  # Replace with your image path
+        self.img2.setPixmap(QPixmap("rocket.png").scaled(180, 120, Qt.KeepAspectRatio))  # Replace with your image path
+        bottom_layout.addWidget(self.img1)
+        bottom_layout.addWidget(self.img2)
+        boxes_col.addWidget(bottom_group, 1)
+
+        # Timer for plot updates (if needed)
         self.ui_timer = QTimer()
         self.ui_timer.timeout.connect(self.refresh_plots)
         self.ui_timer.start(80)
 
-        # --- Right panel: controls & info ---
-        ctrl_group = QGroupBox("Controls")
-        ctrl_layout = QVBoxLayout()
-        ctrl_group.setLayout(ctrl_layout)
-
-        self.send_line = QLineEdit()
-        self.send_line.setPlaceholderText("Type a command (e.g., LED:1) and press Send")
-        self.send_btn = QPushButton("Send")
-        self.send_btn.clicked.connect(self.send_command)
-
-        pwm_row = QHBoxLayout()
-        pwm_row.addWidget(QLabel("PWM:"))
-        self.pwm_slider = QSlider(Qt.Horizontal)
-        self.pwm_slider.setRange(0, 255)
-        self.pwm_slider.valueChanged.connect(self.on_pwm_change)
-        self.pwm_val = QLabel("0")
-        pwm_row.addWidget(self.pwm_slider, 1)
-        pwm_row.addWidget(self.pwm_val)
-
-        ctrl_layout.addWidget(self.send_line)
-        ctrl_layout.addWidget(self.send_btn)
-        ctrl_layout.addLayout(pwm_row)
-
-        # Sampling controls
-        sample_row = QHBoxLayout()
-        sample_row.addWidget(QLabel("Sample every (ms):"))
-        self.sample_spin = QSpinBox()
-        self.sample_spin.setRange(50, 5000)
-        self.sample_spin.setValue(200)
-        sample_row.addWidget(self.sample_spin)
-        self.poll_btn = QPushButton("Start Polling")
-        self.poll_btn.setCheckable(True)
-        self.poll_btn.toggled.connect(self.toggle_polling)
-        sample_row.addWidget(self.poll_btn)
-        sample_row.addStretch(1)
-        ctrl_layout.addLayout(sample_row)
-
-        right.addWidget(ctrl_group)
-
-        # --- Data table ---
-        self.table = QTableWidget(3, 2)
-        self.table.setHorizontalHeaderLabels(["Key", "Value"])
-        self.table.setItem(0, 0, QTableWidgetItem("Temp"))
-        self.table.setItem(1, 0, QTableWidgetItem("Humidity"))
-        self.table.setItem(2, 0, QTableWidgetItem("Status"))
-        right.addWidget(self.table)
-
-        # --- Log ---
-        log_group = QGroupBox("Serial Log")
-        log_layout = QVBoxLayout()
-        log_group.setLayout(log_layout)
-
-        self.log = QTextEdit()
-        self.log.setReadOnly(True)
-        log_layout.addWidget(self.log)
-
-        btn_row = QHBoxLayout()
-        self.clear_log_btn = QPushButton("Clear Log")
-        self.clear_log_btn.clicked.connect(lambda: self.log.clear())
-        self.save_log_btn = QPushButton("Save Log...")
-        self.save_log_btn.clicked.connect(self.save_log)
-        btn_row.addWidget(self.clear_log_btn)
-        btn_row.addWidget(self.save_log_btn)
-        btn_row.addStretch(1)
-        log_layout.addLayout(btn_row)
-
-        right.addWidget(log_group, 1)
-
-        # Scatter demo timer (not from ESP32, just shows available widget)
-        self.scatter_timer = QTimer()
-        self.scatter_timer.timeout.connect(self.update_scatter_demo)
-        self.scatter_timer.start(500)
 
     # ----------- Connection helpers -----------
     def refresh_ports(self):
@@ -298,12 +283,9 @@ class ESP32Dashboard(QWidget):
         #   CSV:  28.42,61.1
         #   LBL:  TEMP:28.42,HUM:61.1
         #   JSON: {"temp":28.42,"hum":61.1}
-        self.append_log(text)
-
         t = time.time()
         temp = None
         hum = None
-
         try:
             if text.startswith('{') and text.endswith('}'):
                 # naive JSON parse without importing json for speed (optional)
@@ -337,8 +319,6 @@ class ESP32Dashboard(QWidget):
             self.t_buf.append(t)
             self.temp_buf.append(temp)
             self.hum_buf.append(hum)
-            self.table.setItem(0, 1, QTableWidgetItem(f"{temp:.2f} °C"))
-            self.table.setItem(1, 1, QTableWidgetItem(f"{hum:.2f} %"))
 
     def refresh_plots(self):
         if len(self.t_buf) > 1:
@@ -405,6 +385,68 @@ class ESP32Dashboard(QWidget):
                     f.write(self.log.toPlainText())
             except Exception as e:
                 QMessageBox.critical(self, "Save Failed", str(e))
+
+class AltitudeBar(QWidget):
+    def __init__(self, min_alt=0, max_alt=1000, parent=None):
+        super().__init__(parent)
+        self.min_alt = min_alt
+        self.max_alt = max_alt
+        self.altitude = 300
+        self.rocket_img = QPixmap("rocket.png")  # Use your image
+        self.setMinimumWidth(100)  # Make a bit wider for scale
+        self.setMinimumHeight(300)
+
+    def set_altitude(self, value):
+        self.altitude = max(self.min_alt, min(self.max_alt, value))
+        self.update()
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        w = self.width()
+        h = self.height()
+        margin = 20
+
+        # Draw background bar
+        bar_rect = QRect(w//2 - 20, margin, 20, h - 2*margin)
+        painter.setBrush(QColor(220, 220, 220))
+        painter.setPen(Qt.NoPen)
+        painter.drawRect(bar_rect)
+
+        # Draw filled progress (blue)
+        frac = (self.altitude - self.min_alt) / (self.max_alt - self.min_alt)
+        fill_height = int(frac * (h - 2*margin))
+        fill_rect = QRect(bar_rect.left(), bar_rect.bottom() - fill_height, bar_rect.width(), fill_height)
+        painter.setBrush(QColor("blue"))
+        painter.drawRect(fill_rect)
+
+        # Draw rocket image at correct height
+        rocket_h = 180
+        rocket_w = 100
+        bar_center_x = bar_rect.left() + bar_rect.width() // 2
+        x = bar_center_x - rocket_w // 2
+        y = bar_rect.bottom() - fill_height - rocket_h // 2
+        img = self.rocket_img.scaled(rocket_w, rocket_h, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        painter.drawPixmap(x, y, img)
+
+        # --- Draw scale on the right ---
+        num_ticks = 5  # Number of major ticks
+        tick_length = 12
+        label_offset = 8
+        font = painter.font()
+        font.setPointSize(8)
+        painter.setFont(font)
+        painter.setPen(Qt.black)
+
+        for i in range(num_ticks + 1):
+            frac_tick = i / num_ticks
+            y_tick = margin + (h - 2*margin) - int(frac_tick * (h - 2*margin))
+            alt_value = int(self.min_alt + frac_tick * (self.max_alt - self.min_alt))
+            # Draw tick
+            painter.drawLine(bar_rect.right() + 2, y_tick, bar_rect.right() + 2 + tick_length, y_tick)
+            # Draw label
+            painter.drawText(bar_rect.right() + 2 + tick_length + label_offset, y_tick + 4, f"{alt_value}")
+# To update altitude:
+# self.altitude_bar.set_altitude(current_altitude)
 
 
 def main():

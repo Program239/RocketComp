@@ -1,6 +1,7 @@
 import sys
 import time
 from collections import deque
+import random
 
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QRect, QUrl
 from PyQt5.QtWidgets import (
@@ -10,6 +11,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtGui import QPixmap, QIcon, QPainter, QColor
 from PyQt5.QtWebEngineWidgets import QWebEngineView
+from PyQt5 import QtCore
 
 import pyqtgraph as pg
 import serial
@@ -186,7 +188,8 @@ class ESP32Dashboard(QWidget):
 
         # Altitude
         self.altitude_bar = AltitudeBar(min_alt=0, max_alt=1000)
-        left_col.addWidget(self.altitude_bar, 1)
+        self.altitude_bar.setMaximumWidth(130)  # Adjust width as needed
+        left_col.addWidget(self.altitude_bar)
 
         # --- Left: 3 Boxes (2 up, 1 down) ---
         boxes_col = QVBoxLayout()
@@ -197,12 +200,13 @@ class ESP32Dashboard(QWidget):
         boxes_col.addLayout(top_row, 1)
 
         # Parachute button
-        img_btn_group = QGroupBox("Image Button")
+        img_btn_group = QGroupBox("Parachute")
         img_btn_layout = QVBoxLayout()
         img_btn_group.setLayout(img_btn_layout)
         self.img_btn = QPushButton()
-        self.img_btn.setIcon(QIcon("your_image.png"))  # Replace with your image path
-        self.img_btn.setIconSize(QPixmap("your_image.png").size())
+        icon_pixmap = QPixmap("parachute_red.png").scaled(200, 200, Qt.KeepAspectRatio, Qt.SmoothTransformation)  # Adjust size as needed
+        self.img_btn.setIcon(QIcon(icon_pixmap))
+        self.img_btn.setIconSize(icon_pixmap.size())
         img_btn_layout.addWidget(self.img_btn)
         top_row.addWidget(img_btn_group, 1)
 
@@ -211,18 +215,18 @@ class ESP32Dashboard(QWidget):
         map_layout = QVBoxLayout()
         map_group.setLayout(map_layout)
         self.web_view = QWebEngineView()
-        self.web_view.setUrl(QUrl("https://www.google.com/maps"))
+        self.web_view.setUrl(QUrl("https://www.openstreetmap.org/#map=10/8.4058/97.9823"))
         map_layout.addWidget(self.web_view)
         top_row.addWidget(map_group, 2)
 
         # Bottom: Gyro
-        bottom_group = QGroupBox("Images")
+        bottom_group = QGroupBox("Gyro")
         bottom_layout = QHBoxLayout()
         bottom_group.setLayout(bottom_layout)
         self.img1 = QLabel()
         self.img2 = QLabel()
-        self.img1.setPixmap(QPixmap("rocket.png").scaled(180, 120, Qt.KeepAspectRatio))  # Replace with your image path
-        self.img2.setPixmap(QPixmap("rocket.png").scaled(180, 120, Qt.KeepAspectRatio))  # Replace with your image path
+        self.img1.setPixmap(QPixmap("rocket.png").scaled(300, 180, Qt.KeepAspectRatio))  # Replace with your image path
+        self.img2.setPixmap(QPixmap("rocket.png").scaled(300, 180, Qt.KeepAspectRatio))  # Replace with your image path
         bottom_layout.addWidget(self.img1)
         bottom_layout.addWidget(self.img2)
         boxes_col.addWidget(bottom_group, 1)
@@ -231,6 +235,11 @@ class ESP32Dashboard(QWidget):
         self.ui_timer = QTimer()
         self.ui_timer.timeout.connect(self.refresh_plots)
         self.ui_timer.start(80)
+
+        # --- TEST: Inject random data for dashboard demo ---
+        self.test_timer = QTimer()
+        self.test_timer.timeout.connect(self._inject_random_data)
+        self.test_timer.start(500)  # every 500 ms
 
 
     # ----------- Connection helpers -----------
@@ -360,6 +369,12 @@ class ESP32Dashboard(QWidget):
             self.append_log(f"> {line.strip()}")
         else:
             self.append_log("! Not connected")
+
+    def _inject_random_data(self):
+        temp = round(random.uniform(20, 40), 2)
+        hum = round(random.uniform(30, 80), 2)
+        # Simulate a CSV line as if from serial
+        self.handle_line(f"{temp},{hum}")
 
     # ----------- Scatter demo (unrelated to serial) -----------
     def update_scatter_demo(self):
